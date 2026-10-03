@@ -1,0 +1,174 @@
+name: Build Junba KTV v1.2a Windows Single + Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+  attestations: write
+  id-token: write
+
+jobs:
+  validate-windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+          cache: 'pip'
+          cache-dependency-path: windows/requirements.txt
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pyinstaller
+      - name: Validate Windows source
+        shell: pwsh
+        run: |
+          python -m compileall -q main.py app tests
+          python -m pytest -q
+          python -c "from app.review import similarity; assert similarity('你好世界','你好，世界。') > .95"
+          python -c "from app.gemini_service import _model_order; assert len(_model_order('gemini-3.8-flash')) >= 3"
+
+  windows-single:
+    needs: validate-windows
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+          cache: 'pip'
+          cache-dependency-path: windows/requirements.txt
+      - name: Install
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: Build Single EXE only
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean packaging/single.spec
+          if (!(Test-Path 'dist/Junba_KTV_MultiTrack_v1.2a.exe')) { throw 'Single EXE missing' }
+      - name: Optional Authenticode signing
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERT_B64)) { Write-Host 'No Windows signing certificate; continue unsigned.'; exit 0 }
+          [IO.File]::WriteAllBytes('cert.pfx',[Convert]::FromBase64String($env:CERT_B64))
+          $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object {$_.FullName -match 'x64'} | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f cert.pfx /p $env:CERT_PASS 'dist/Junba_KTV_MultiTrack_v1.2a.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows signing failed' }
+          & $signtool verify /pa /v 'dist/Junba_KTV_MultiTrack_v1.2a.exe'
+          Remove-Item cert.pfx -Force
+      - name: Package Windows Single EXE
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item 'dist/Junba_KTV_MultiTrack_v1.2a.exe' 'release/Junba_KTV_MultiTrack_v1.2a.exe'
+          Get-FileHash 'release/Junba_KTV_MultiTrack_v1.2a.exe' -Algorithm SHA256 | Format-List | Out-File 'release/Junba_KTV_MultiTrack_v1.2a.sha256.txt'
+          Compress-Archive -Path 'release/Junba_KTV_MultiTrack_v1.2a.exe','release/Junba_KTV_MultiTrack_v1.2a.sha256.txt' -DestinationPath 'release/Junba-KTV-MultiTrack-v1.2a-Single-EXE-Windows-x64.zip' -CompressionLevel Optimal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Junba-KTV-MultiTrack-v1.2a-Single-EXE-Windows-x64
+          path: windows/release/Junba-KTV-MultiTrack-v1.2a-Single-EXE-Windows-x64.zip
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: windows/release/Junba-KTV-MultiTrack-v1.2a-Single-EXE-Windows-x64.zip
+
+  android-apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Locate Android SDK and install required packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "Using Android SDK: $ANDROID_SDK"
+          test -d "$ANDROID_SDK"
+          SDKMANAGER="$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_SDK/cmdline-tools" -type f -path '*/bin/sdkmanager' 2>/dev/null | sort -V | tail -n 1)"
+          fi
+          test -n "${SDKMANAGER:-}"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_HOME=$ANDROID_SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK/platform-tools" >> "$GITHUB_PATH"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Preflight Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'setFixedLengthStreamingMode' android/app/src/main/java/tw/junba/ktvmultitrack/GeminiApi.kt
+          if grep -q '\.fixedLengthStreamingMode(' android/app/src/main/java/tw/junba/ktvmultitrack/GeminiApi.kt; then
+            echo 'Old invalid Kotlin call found.' >&2
+            exit 1
+          fi
+          grep -q 'versionName = "1.2a"' android/app/build.gradle.kts
+          grep -q 'setText(prefs.getString("api_key", "") ?: "")' android/app/src/main/java/tw/junba/ktvmultitrack/MainActivity.kt
+          if grep -q 'text = prefs.getString("api_key"' android/app/src/main/java/tw/junba/ktvmultitrack/MainActivity.kt; then
+            echo 'Invalid EditText.text String assignment found.' >&2
+            exit 1
+          fi
+      - name: Compile Android Kotlin first
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon -p android :app:compileDebugKotlin --stacktrace
+      - name: Build APK
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p android/release
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > android/junba-release.jks
+            gradle --no-daemon -p android :app:assembleRelease --stacktrace \
+              -PjunbaKeystore="$GITHUB_WORKSPACE/android/junba-release.jks" \
+              -PjunbaStorePassword="$KS_PASS" -PjunbaKeyAlias="$KEY_ALIAS" -PjunbaKeyPassword="$KEY_PASS"
+            cp android/app/build/outputs/apk/release/app-release.apk android/release/Junba-KTV-MultiTrack-v1.2a.apk
+          else
+            echo "No Android release keystore configured; building installable debug APK."
+            gradle --no-daemon -p android :app:assembleDebug --stacktrace
+            cp android/app/build/outputs/apk/debug/app-debug.apk android/release/Junba-KTV-MultiTrack-v1.2a.apk
+          fi
+          test -s android/release/Junba-KTV-MultiTrack-v1.2a.apk
+          sha256sum android/release/Junba-KTV-MultiTrack-v1.2a.apk > android/release/Junba-KTV-MultiTrack-v1.2a.apk.sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Junba-KTV-MultiTrack-v1.2a-Android-APK
+          path: android/release/*
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: android/release/Junba-KTV-MultiTrack-v1.2a.apk

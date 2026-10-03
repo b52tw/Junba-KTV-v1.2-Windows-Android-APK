@@ -1,0 +1,17 @@
+GitHub 上傳步驟（v1.2a）
+
+1. 建議建立新 Repository，例如：Junba_KTV_MultiTrack_v1.2a
+2. 將本壓縮包解壓後的「所有內容」上傳到 Repository 根目錄。
+3. 確認以下路徑存在：
+   .github/workflows/build-windows-android-v1.2a.yml
+   windows/main.py
+   android/app/build.gradle.kts
+4. Commit 到 main branch 後，開啟 Actions。
+5. Workflow 名稱：Build Junba KTV v1.2a Windows Single + Android APK
+6. 成功後下載：
+   Junba-KTV-MultiTrack-v1.2a-Single-EXE-Windows-x64
+   Junba-KTV-MultiTrack-v1.2a-Android-APK
+
+若 Android job 失敗：
+- 點 android-apk -> Compile Android Kotlin first，看第一個 Kotlin 錯誤即可。
+- v1.2a 已刻意把 Kotlin compile 獨立出來，避免只看到 assembleDebug 的模糊失敗。

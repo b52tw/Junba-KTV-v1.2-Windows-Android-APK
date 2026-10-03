@@ -1,0 +1,8 @@
+峻爸 KTV 多文字軌核對器 v1.2a｜Android APK 編譯 Hotfix
+
+1. 修正 MainActivity.kt API Key 欄位 Kotlin 編譯錯誤：
+   EditText.text 不能直接接 String，改用 setText(...)
+2. Android versionCode 21、versionName 1.2a。
+3. Android Gradle compile/build 改用 --no-daemon。
+4. Workflow Preflight 新增 API Key 欄位錯誤寫法檢查。
+5. Windows KTV / Gemini / 多文字軌功能不更動。

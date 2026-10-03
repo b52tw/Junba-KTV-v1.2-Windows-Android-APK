@@ -1,0 +1,23 @@
+峻爸 KTV 多文字軌核對器 v1.2a｜APK 編譯 Hotfix 驗證報告
+
+已確認 GitHub Actions v1.2 失敗原因：
+- :app:compileDebugKotlin
+- MainActivity.kt:530
+- Type mismatch: String? / String 指派給 EditText.text（Android 為 Editable?）
+
+v1.2a 修正：
+- text = prefs.getString("api_key", "") ?: ""
+  改為
+  setText(prefs.getString("api_key", "") ?: "")
+- Android versionCode 21 / versionName 1.2a
+- Gradle compile/build 加上 --no-daemon，降低 daemon 狀態干擾
+- Workflow preflight 新增檢查，避免舊錯誤寫法再次進入 Kotlin 編譯
+- 保留先 compileDebugKotlin、通過後才 assembleDebug/Release 的流程
+
+Windows 驗證：
+- compileall：通過
+- pytest：13 passed
+
+Android：
+- 已針對 GitHub 實際錯誤行完成原始碼修正與 workflow preflight。
+- 最終 APK 是否成功產出仍需 GitHub Android runner 實際執行 Gradle 後確認；本報告不宣稱尚未跑過的 APK 已完成編譯。
